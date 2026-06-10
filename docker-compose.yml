@@ -1,0 +1,86 @@
+version: '3.8'
+
+networks:
+  compute_network:
+    driver: bridge
+
+services:
+  mysql_db:
+    image: mysql:8.0
+    container_name: compute_mysql
+    environment:
+      MYSQL_DATABASE: compute_api_db
+      MYSQL_ROOT_PASSWORD: secret_root_pass
+      MYSQL_USER: compute_app_user
+      MYSQL_PASSWORD: A_Secure_Complex_Password_123!
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "compute_app_user", "-pA_Secure_Complex_Password_123!"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "3307:3306"
+    networks:
+      - compute_network
+    volumes:
+      - mysql_data:/var/lib/mysql  
+
+  # 2. Asynchronous Message Broker Layer
+  redis_queue:
+    image: redis:7-alpine
+    container_name: compute_redis
+    ports:
+      - "6380:6379"
+    networks:
+      - compute_network
+
+  # 3. FastAPI Core Web Engine Gateway
+  web_api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: compute_fastapi
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    volumes:
+      - ./app:/app/app  # Mounts source code locally for live-reloads during dev
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=development
+      - APP_NAME="High-Performance Compute API"
+      - DATABASE_URL=mysql+pymysql://compute_app_user:A_Secure_Complex_Password_123!@mysql_db:3306/compute_api_db
+      - REDIS_URL=redis://redis_queue:6379/0
+      - SECRET_KEY=super-secret-crypto-key-here  
+    depends_on:
+      mysql_db:
+        condition: service_healthy
+      redis_queue:
+        condition: service_started
+    networks:
+      - compute_network
+
+  # 4. Celery Compute Worker Engine Process
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: compute_celery
+    command: celery -A app.worker.celery_app worker --loglevel=info
+    volumes:
+      - ./app:/app/app
+    environment:
+      - ENVIRONMENT=development
+      - APP_NAME="High-Performance Compute API"
+      - DATABASE_URL=mysql+pymysql://compute_app_user:A_Secure_Complex_Password_123!@mysql_db:3306/compute_api_db
+      - REDIS_URL=redis://redis_queue:6379/0
+      - SECRET_KEY=super-secret-crypto-key-here
+    depends_on:
+      redis_queue:
+        condition: service_started
+      mysql_db:
+        condition: service_healthy
+    networks:
+      - compute_network
+
+volumes:
+  mysql_data:

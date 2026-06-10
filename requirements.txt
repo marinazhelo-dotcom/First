@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+sqlmodel
+celery
+redis
+pymysql
+datetime
+greenlet
+pydantic_settings
