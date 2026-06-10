@@ -49,4 +49,3 @@ def get_job_status(job_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
     return job
 
-

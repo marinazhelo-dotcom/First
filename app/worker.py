@@ -31,7 +31,7 @@ def run_complex_computation(job_id: str, complexity: int) -> float:
     print(f"Starting complex math task {job_id}...")
     total = 0.0
     for i in range(complexity * 10000):
-        total = (i ^ 2) * 0.01
+        total = (i ** 2) * 0.01
     time.sleep(5) # Simulating extra deep system processing latency
 
     # 3. Update status to SUCCESS and save data
