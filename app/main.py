@@ -11,12 +11,13 @@ from app.worker import run_complex_computation
 
 # MySQL connections can drop if idle, so we add a pool_recycle time
 engine = create_engine(settings.DATABASE_URL, pool_recycle=3600, echo=(settings.ENVIRONMENT == "development"))
-app = FastAPI(title=settings.APP_NAME)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await to_thread.run_sync(SQLModel.metadata.create_all, engine)
     yield
+
+app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 
 def get_db() -> Session:
     with Session(engine) as session:
