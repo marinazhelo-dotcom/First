@@ -1,8 +1,15 @@
 import time
 from celery import Celery
 from sqlmodel import create_engine, Session
-from app.models import ComputeJob, JobStatus, SQLModel
+from app.models import ComputeJob, GraphJob, JobStatus, SQLModel
 from app.config import settings
+
+import io
+import numpy as np
+import matplotlib
+# matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
 
 # Connect Celery to Redis broker
 celery_app = Celery(
@@ -20,12 +27,9 @@ SQLModel.metadata.create_all(sqlalchemy_engine)
 def run_complex_computation(job_id: str, complexity: int) -> float:
     # This function runs in a completely separate worker process.
     # 1. Update status to RUNNING in database
-    with Session(sqlalchemy_engine) as session:
-        job = session.get(ComputeJob, job_id)
-        if job:
-            job.status = JobStatus.RUNNING
-            session.add(job)
-            session.commit()
+    change_job_status(ComputeJob, job_id, JobStatus.RUNNING)
+    db_commit()
+
 
     # 2. Simulate a heavy CPU-bound calculation (e.g., intensive matrix loops)
     print(f"Starting complex math task {job_id}...")
@@ -35,11 +39,74 @@ def run_complex_computation(job_id: str, complexity: int) -> float:
     time.sleep(5) # Simulating extra deep system processing latency
 
     # 3. Update status to SUCCESS and save data
-    with Session(sqlalchemy_engine) as session:
-        job = session.get(ComputeJob, job_id)
-        if job:
-            job.status = JobStatus.COMPLETED
-            session.add(job)
-            session.commit()
+    change_job_status(ComputeJob, job_id, JobStatus.COMPLETED)
+    db_commit()
+
 
     return total
+
+
+@celery_app.task()
+def generate_fractal_graph(job_id: str, cx: float, cy: float, zoom: float, max_iter: int = 100):
+    job = change_job_status(GraphJob, job_id)
+    db_commit()
+
+    try:
+        # 1. Define resolution dimensions for our coordinate grid matrix
+        h, w = 500, 500
+
+        # 2. Construct complex plane limits based on user zoom boundaries
+        x_min, x_max = cx - (1.5 / zoom), cx + (1.5 / zoom)
+        y_min, y_max = cy - (1.5 / zoom), cy + (1.5 / zoom)
+
+        # 3. Use NumPy to create multi-dimensional math grids instantly
+        X = np.linspace(x_min, x_max, num=w)
+        Y = np.linspace(y_min, y_max, num=h)
+        print(X)
+        print(Y)
+        C = X + Y[:, None] * 1j
+        print(C)
+        Z = np.zeros_like(C)
+        M = np.zeros(C.shape, dtype=int)
+
+        # 4. Run the Core Mathematical Equation loop
+        for i in range(max_iter):
+            # Mandelbrot formula: Z = Z^2 + C
+            mask: bool = np.abs(Z) <= 2
+            Z[mask] = Z[mask]**2 + C[mask]
+            M[mask] = i
+        
+        # 5. Graph the data matrix using Matplotlib
+        fig, ax = plt.subplots(figsize=(6, 6), dpi=100)
+        ax.imshow(M, cmap="twilight_shifted", extent=[x_min, x_max, y_min, y_max])
+        ax.axis('off') # Clean graph layout without generic plot markers
+
+        # 6. Save graph figure directly to an in-memory byte buffer array
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
+        plt.close(fig)
+        buf.seek(0)
+
+        # 7. Write the raw binary bytes back to our database record
+        job.generated_graph = buf.getvalue()
+        change_job_status(GraphJob, job_id, JobStatus.SUCCESS)
+
+    except Exception as e:
+        change_job_status(GraphJob, job_id, JobStatus.FAILED)
+        print(f"Mathematical calculation crashed: {str(e)}")
+    finally:
+        db_commit()
+
+
+def change_job_status(entity: SQLModel, job_id: str, status: JobStatus = JobStatus.RUNNING) -> SQLModel:
+    with Session(sqlalchemy_engine) as session:
+        job = session.get(entity, job_id)
+        if job:
+            job.status = status
+            session.add(job)
+            session.flush()
+    return job
+
+def db_commit() -> None:
+    with Session(sqlalchemy_engine) as session:
+        session.commit()
