@@ -60,7 +60,7 @@ Note: The system utilizes explicit Docker Compose Healthchecks. The API gateway 
 
 ## 📡 Core API Specifications
 
-Once the API gateway initializes, open your browser and access the interactive Swagger Documentation portal at: ```http://127.0.0.1:8000/docs```
+Once the API gateway initializes, open your browser and access the interactive Swagger Documentation portal at: ```http://0.0.0.0:8000/docs```
 ### 1. Dispatch a Compute Job
 Endpoint: ```POST /fractal```
 Payload Format:
