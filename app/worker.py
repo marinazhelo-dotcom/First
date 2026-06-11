@@ -38,7 +38,7 @@ def run_complex_computation(job_id: str, complexity: int) -> float:
         total = (i ** 2) * 0.01
     time.sleep(5) # Simulating extra deep system processing latency
 
-    # 3. Update status to SUCCESS and save data
+    # 3. Update status to COMPLETED and save data
     change_job_status(ComputeJob, job_id, JobStatus.COMPLETED)
     db_commit()
 
@@ -89,7 +89,7 @@ def generate_fractal_graph(job_id: str, cx: float, cy: float, zoom: float, max_i
 
         # 7. Write the raw binary bytes back to our database record
         job.generated_graph = buf.getvalue()
-        change_job_status(GraphJob, job_id, JobStatus.SUCCESS)
+        change_job_status(GraphJob, job_id, JobStatus.COMPLETED)
 
     except Exception as e:
         change_job_status(GraphJob, job_id, JobStatus.FAILED)
