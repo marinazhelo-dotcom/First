@@ -89,7 +89,7 @@ def generate_fractal_graph(job_id: str, cx: float, cy: float, zoom: float, max_i
 
         # 7. Write the raw binary bytes back to our database record
         job.generated_graph = buf.getvalue()
-        change_job_status(GraphJob, job_id, JobStatus.SUCCESS)
+        change_job_status(GraphJob, job_id, JobStatus.COMPLETED)
 
     except Exception as e:
         change_job_status(GraphJob, job_id, JobStatus.FAILED)
