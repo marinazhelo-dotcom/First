@@ -1,14 +1,16 @@
 import time
 from celery import Celery
+from sqlalchemy.exc import NoResultFound
 from sqlmodel import create_engine, Session
 from app.models import ComputeJob, GraphJob, JobStatus, SQLModel
 from app.config import settings
 
 import io
 import numpy as np
-import matplotlib
-# matplotlib.use('Agg')
-import matplotlib.pyplot as plt
+import  matplotlib
+matplotlib.use('Agg')
+from  matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 
 # Connect Celery to Redis broker
@@ -48,8 +50,16 @@ def run_complex_computation(job_id: str, complexity: int) -> float:
 
 @celery_app.task()
 def generate_fractal_graph(job_id: str, cx: float, cy: float, zoom: float, max_iter: int = 100):
-    job = change_job_status(GraphJob, job_id)
-    db_commit()
+    # job = change_job_status(GraphJob, job_id)
+    with Session(sqlalchemy_engine) as session:
+        job = session.get(GraphJob, job_id)
+        if job:
+            job.status = JobStatus.RUNNING
+            session.add(job)
+            session.flush()
+        else:
+            print(f"No job found by {job_id}")
+        session.commit()
 
     try:
         # 1. Define resolution dimensions for our coordinate grid matrix
@@ -62,10 +72,7 @@ def generate_fractal_graph(job_id: str, cx: float, cy: float, zoom: float, max_i
         # 3. Use NumPy to create multi-dimensional math grids instantly
         X = np.linspace(x_min, x_max, num=w)
         Y = np.linspace(y_min, y_max, num=h)
-        print(X)
-        print(Y)
         C = X + Y[:, None] * 1j
-        print(C)
         Z = np.zeros_like(C)
         M = np.zeros(C.shape, dtype=int)
 
@@ -77,22 +84,42 @@ def generate_fractal_graph(job_id: str, cx: float, cy: float, zoom: float, max_i
             M[mask] = i
         
         # 5. Graph the data matrix using Matplotlib
-        fig, ax = plt.subplots(figsize=(6, 6), dpi=100)
+        fig = Figure(figsize=(6, 6), dpi=100)
+        canvas = FigureCanvasAgg(fig)
+        ax = fig.add_subplot(111)
         ax.imshow(M, cmap="twilight_shifted", extent=[x_min, x_max, y_min, y_max])
         ax.axis('off') # Clean graph layout without generic plot markers
 
         # 6. Save graph figure directly to an in-memory byte buffer array
         buf = io.BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
-        plt.close(fig)
+        fig.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
         buf.seek(0)
+        image_bytes = buf.getvalue()
+        print(f"Success! Generated image payload size: {len(image_bytes)} bytes")
 
         # 7. Write the raw binary bytes back to our database record
-        job.generated_graph = buf.getvalue()
-        change_job_status(GraphJob, job_id, JobStatus.COMPLETED)
+        
+        with Session(sqlalchemy_engine) as session:
+            job = session.get(GraphJob, job_id)
+            if job:
+                job.generated_graph = image_bytes
+                job.status = JobStatus.COMPLETED
+                session.add(job)
+                session.flush()
+            else:
+                print(f"No job found by {job_id}")
+            session.commit()
 
-    except Exception as e:
-        change_job_status(GraphJob, job_id, JobStatus.FAILED)
+    except Exception as e:  
+        with Session(sqlalchemy_engine) as session:
+            job = session.get(GraphJob, job_id)
+            if job:
+                job.status = JobStatus.FAILED
+                session.add(job)
+                session.flush()
+            else:
+                print(f"No job found by {job_id}")
+            session.commit()
         print(f"Mathematical calculation crashed: {str(e)}")
     finally:
         db_commit()
@@ -105,8 +132,14 @@ def change_job_status(entity: SQLModel, job_id: str, status: JobStatus = JobStat
             job.status = status
             session.add(job)
             session.flush()
+        else:
+            print(f"No job found by {job_id}")
     return job
 
 def db_commit() -> None:
     with Session(sqlalchemy_engine) as session:
         session.commit()
+
+def db_save(job) -> None:
+    with Session(sqlalchemy_engine) as session:
+        session.add(job)

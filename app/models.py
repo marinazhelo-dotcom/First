@@ -30,7 +30,7 @@ class GraphJob(SQLModel, table=True):
     max_iterations: int = Field(default=100)
 
     #  Storage for the generated mathematical graph plot image
-    generated_graph: Optional[bytes] = Field(default=None, max_length=16_777_215) # Medium/LongBlob
+    generated_graph: Optional[bytes] = Field(default=None, max_length=4_294_967_295) # LongBlob
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
