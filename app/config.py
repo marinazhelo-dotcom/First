@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Final
 
 
 class Settings(BaseSettings):
@@ -16,3 +17,8 @@ class Settings(BaseSettings):
     )
 
 settings = Settings()
+
+DEFAULT_FRACTAL_CX: Final[float] = -0.7
+DEFAULT_FRACTAL_CY: Final[float] = 0.27015
+DEFAULT_FRACTAL_ZOOM: Final[float] = 1.0
+DEFAULT_FRACTAL_ITERATIONS: Final[int] = 100
