@@ -1,10 +1,14 @@
-from typing import Final
+from typing import Final, Optional
 import uuid
 from contextlib import asynccontextmanager
-from fastapi import Depends, FastAPI, HTTPException, Response
+from fastapi import Depends, FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from numpy._core.numerictypes import int16
+from redis.client import PubSub
 from sqlmodel import Session, create_engine, SQLModel
 from anyio import to_thread
+import asyncio
+import redis.asyncio as aioredis
+
 
 from app.config import (
     settings, 
@@ -76,10 +80,10 @@ def compute_math_graph(payload: FractalRequest,  db: Session = Depends(get_db)):
     job_id = str(uuid.uuid4())
     new_job = GraphJob(
         id=job_id,
-        center_x=payload.get("cx", DEFAULT_FRACTAL_CX),
-        center_y=payload.get("cy", DEFAULT_FRACTAL_CY),
-        zoom=payload.get("zoom", DEFAULT_FRACTAL_ZOOM),
-        max_iterations=payload.get("iterations", DEFAULT_FRACTAL_ITERATIONS)
+        center_x=payload.cx or DEFAULT_FRACTAL_CX,
+        center_y=payload.cy or DEFAULT_FRACTAL_CY,
+        zoom=payload.zoom or DEFAULT_FRACTAL_ZOOM,
+        max_iterations=payload.iterations or DEFAULT_FRACTAL_ITERATIONS
     )
     db.add(new_job)
     db.commit()
@@ -134,3 +138,47 @@ def get_computed_graph(job_id: str, db: Session = Depends(get_db)):
 
     # Return raw binary bytes directly as a media stream response object!
     return Response(content=job.generated_graph, media_type="image/png")
+
+
+@app.websocket("/fractal/{job_id}/stream")
+async def stream_job_status(job_id: str, websocket: WebSocket):
+    # 1. Accept the incoming persistent TCP handshake
+    await websocket.accept()
+    # 2. Establish an asynchronous connection to your Redis queue instance
+    async_redis = aioredis.from_url(settings.REDIS_URL)
+    pubsub: PubSub = async_redis.pubsub()
+
+    channel_name = f"job_status:{job_id}"
+    await pubsub.subscribe(channel_name)
+    try:
+        # Send an immediate connection acknowledgment back to the UI client
+        await websocket.send_json({"status": "CONNECTED", "message": f"Listening for changes on job {job_id}"})
+
+        # 3. Enter an async listening loop
+        while True:
+            # Look for a message on the Redis channel without blocking other API routes
+            message: Optional[str] = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+
+            if message:
+                # Extract the payload bytes out of the Redis frame data
+                data_signal = message['data'].decode('utf-8')
+
+                if data_signal == JobStatus.COMPLETED.value:
+                    # 4. Fire the event down to the client's browser instantly!
+                    await websocket.send_json({
+                        "status": "SUCCESS", 
+                        "message": "Mathematical rendering engine finished processing.",
+                        "graph_url": f"/fractal/{job_id}/graph"
+                    })
+                    break
+            # Yield control back to the event loop for a microsecond to keep things smooth
+            await asyncio.sleep(0.1)
+    
+    except WebSocketDisconnect:
+        print(f"Client disconnected early from streaming socket for job: {job_id}")
+    finally:
+        # 5. Production Clean-up: Always unsubscribe and close sockets to prevent file descriptor leaks
+        await pubsub.unsubscribe(channel_name)
+        await websocket.close()
+        
+

@@ -1,4 +1,5 @@
 import time
+import redis
 from celery import Celery
 from sqlalchemy.exc import NoResultFound
 from sqlmodel import create_engine, Session
@@ -23,10 +24,13 @@ celery_app = Celery(
 sqlalchemy_engine = create_engine(settings.DATABASE_URL)
 # 🚀 Force the worker process to create the tables if they don't exist yet!
 SQLModel.metadata.create_all(sqlalchemy_engine)
+# Redis
+redis_client = redis.Redis.from_url(settings.REDIS_URL)
 
 
 @celery_app.task()
 def run_complex_computation(job_id: str, complexity: int) -> float:
+    channel_name = f"job_status:{job_id}"
     # This function runs in a completely separate worker process.
     # 1. Update status to RUNNING in database
     change_job_status(ComputeJob, job_id, JobStatus.RUNNING)
@@ -43,6 +47,7 @@ def run_complex_computation(job_id: str, complexity: int) -> float:
     # 3. Update status to COMPLETED and save data
     change_job_status(ComputeJob, job_id, JobStatus.COMPLETED)
     db_commit()
+    redis_client.publish(channel_name, "Completed")
 
 
     return total
@@ -50,6 +55,7 @@ def run_complex_computation(job_id: str, complexity: int) -> float:
 
 @celery_app.task()
 def generate_fractal_graph(job_id: str, cx: float, cy: float, zoom: float, max_iter: int = 100):
+    channel_name = f"job_status:{job_id}"
     # job = change_job_status(GraphJob, job_id)
     with Session(sqlalchemy_engine) as session:
         job = session.get(GraphJob, job_id)
@@ -110,6 +116,7 @@ def generate_fractal_graph(job_id: str, cx: float, cy: float, zoom: float, max_i
                 print(f"No job found by {job_id}")
             session.commit()
 
+
     except Exception as e:  
         with Session(sqlalchemy_engine) as session:
             job = session.get(GraphJob, job_id)
@@ -122,7 +129,10 @@ def generate_fractal_graph(job_id: str, cx: float, cy: float, zoom: float, max_i
             session.commit()
         print(f"Mathematical calculation crashed: {str(e)}")
     finally:
+        time.sleep(5)
         db_commit()
+        res = redis_client.publish(channel_name, JobStatus.COMPLETED.value)
+        print(res)
 
 
 def change_job_status(entity: SQLModel, job_id: str, status: JobStatus = JobStatus.RUNNING) -> SQLModel:
