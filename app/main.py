@@ -1,7 +1,9 @@
 from typing import Final, Optional
 import uuid
+from pathlib import Path
 from contextlib import asynccontextmanager
-from fastapi import Depends, FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
 from numpy._core.numerictypes import int16
 from redis.client import PubSub
 from sqlmodel import Session, create_engine, SQLModel
@@ -40,6 +42,15 @@ app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 def get_db() -> Session:
     with Session(engine) as session:
         yield session
+
+
+static_dir = Path(__file__).parent / "static"
+index_html = (static_dir / "index.html").read_text()
+
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+def frontend():
+    return index_html
 
 
 @app.post("/compute", status_code=202)

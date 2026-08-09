@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Distributed Math Engine — Fractal Lab</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+    background: #0d1117; color: #c9d1d9; min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center; padding: 40px 16px;
+  }
+  h1 { font-size: 1.4rem; color: #58a6ff; margin-bottom: 4px; }
+  .subtitle { font-size: 0.8rem; color: #8b949e; margin-bottom: 32px; }
+  .card {
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    padding: 24px; width: 100%; max-width: 620px; margin-bottom: 20px;
+  }
+  .card h2 { font-size: 0.9rem; color: #f0f6fc; margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .field { flex: 1; min-width: 120px; }
+  .field label { display: block; font-size: 0.75rem; color: #8b949e; margin-bottom: 4px; }
+  .field input {
+    width: 100%; padding: 8px 10px; font-size: 0.85rem; font-family: inherit;
+    background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #f0f6fc;
+    outline: none; transition: border-color 0.15s;
+  }
+  .field input:focus { border-color: #58a6ff; }
+  button {
+    width: 100%; margin-top: 16px; padding: 10px; font-size: 0.85rem; font-family: inherit;
+    font-weight: 600; border: none; border-radius: 6px; cursor: pointer;
+    background: #238636; color: #fff; transition: background 0.15s;
+  }
+  button:hover { background: #2ea043; }
+  button:disabled { background: #21262d; color: #484f58; cursor: not-allowed; }
+  .status-bar {
+    display: flex; align-items: center; gap: 8px; font-size: 0.78rem;
+    padding: 8px 12px; border-radius: 6px; margin-top: 12px;
+    background: #161b22; border: 1px solid #30363d;
+  }
+  .status-bar .dot {
+    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  }
+  .dot.pending { background: #d29922; }
+  .dot.running { background: #58a6ff; animation: pulse 1s infinite; }
+  .dot.completed { background: #3fb950; }
+  .dot.failed { background: #f85149; }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+  .image-wrapper {
+    width: 100%; max-width: 620px; border-radius: 8px; overflow: hidden;
+    border: 1px solid #30363d; background: #000; display: none;
+  }
+  .image-wrapper.visible { display: block; }
+  .image-wrapper img { width: 100%; display: block; }
+  .log {
+    background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+    padding: 10px 14px; margin-top: 12px; font-size: 0.75rem; color: #8b949e;
+    max-height: 140px; overflow-y: auto; display: none;
+  }
+  .log.visible { display: block; }
+  .log div { padding: 2px 0; }
+  .log div.ws  { color: #a371f7; }
+  .log div.rest { color: #3fb950; }
+  .log div.err  { color: #f85149; }
+  .nav { font-size: 0.75rem; color: #8b949e; margin-top: 32px; }
+  .nav a { color: #58a6ff; text-decoration: none; }
+  .nav a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+  <h1>&#9874; Distributed Math Engine</h1>
+  <p class="subtitle">Mandelbrot Fractal — real-time WebSocket demo</p>
+
+  <div class="card">
+    <h2>&#9654; Dispatch a Fractal Job</h2>
+    <div class="row">
+      <div class="field"><label>cx</label><input id="cx" value="-0.7"></div>
+      <div class="field"><label>cy</label><input id="cy" value="0.27015"></div>
+      <div class="field"><label>zoom</label><input id="zoom" value="1.5"></div>
+      <div class="field"><label>iterations</label><input id="iterations" value="100"></div>
+    </div>
+    <button id="submitBtn" onclick="dispatch()">&#9654; Submit Job</button>
+
+    <div id="statusBar" class="status-bar" style="display:none">
+      <span class="dot" id="statusDot"></span>
+      <span id="statusText"></span>
+    </div>
+    <div id="log" class="log"></div>
+  </div>
+
+  <div id="imageWrapper" class="image-wrapper">
+    <img id="fractalImg" alt="Fractal output">
+  </div>
+
+  <p class="nav"><a href="/docs">&#8594; Swagger API Docs</a></p>
+
+<script>
+  const API   = '';
+  const WS_BASE = location.protocol === 'https:' ? 'wss://' + location.host : 'ws://' + location.host;
+
+  let ws = null;
+  let currentJobId = null;
+
+  function log(msg, cls) {
+    const el = document.getElementById('log');
+    el.classList.add('visible');
+    const div = document.createElement('div');
+    div.className = cls || '';
+    div.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
+    el.appendChild(div);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function setStatus(dotClass, text) {
+    const bar = document.getElementById('statusBar');
+    bar.style.display = 'flex';
+    document.getElementById('statusDot').className = 'dot ' + dotClass;
+    document.getElementById('statusText').textContent = text;
+  }
+
+  async function dispatch() {
+    const btn = document.getElementById('submitBtn');
+    if (ws) { ws.close(); ws = null; }
+    document.getElementById('imageWrapper').classList.remove('visible');
+    document.getElementById('log').classList.remove('visible');
+    document.getElementById('log').innerHTML = '';
+
+    const body = {
+      cx:         parseFloat(document.getElementById('cx').value),
+      cy:         parseFloat(document.getElementById('cy').value),
+      zoom:       parseFloat(document.getElementById('zoom').value),
+      iterations: parseInt(document.getElementById('iterations').value)
+    };
+
+    btn.disabled = true;
+    setStatus('pending', 'Dispatching job...');
+
+    try {
+      const res = await fetch(API + '/fractal', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      currentJobId = data.job_id;
+      log('Job created: ' + currentJobId, 'rest');
+      setStatus('running', 'Job ' + currentJobId + ' — processing');
+      openStream(currentJobId);
+    } catch (e) {
+      log('Failed to dispatch job: ' + e.message, 'err');
+      setStatus('failed', 'Dispatch failed');
+      btn.disabled = false;
+    }
+  }
+
+  function openStream(jobId) {
+    const url = WS_BASE + '/fractal/' + jobId + '/stream';
+    log('WebSocket connecting to ' + url, 'ws');
+
+    ws = new WebSocket(url);
+    ws.onopen = () => log('WebSocket connected — listening for completion', 'ws');
+
+    ws.onmessage = (evt) => {
+      const msg = JSON.parse(evt.data);
+      log('[WS] ' + msg.status + ': ' + msg.message, 'ws');
+
+      if (msg.status === 'SUCCESS' || msg.status === 'Completed') {
+        setStatus('completed', 'Rendering complete');
+        log('Fetching graph from ' + msg.graph_url, 'rest');
+        loadGraph(msg.graph_url);
+        ws.close();
+      }
+    };
+
+    ws.onerror = (e) => {
+      log('WebSocket error', 'err');
+      setStatus('failed', 'WebSocket error');
+    };
+
+    ws.onclose = () => {
+      log('WebSocket closed', 'ws');
+      document.getElementById('submitBtn').disabled = false;
+    };
+  }
+
+  async function loadGraph(url) {
+    try {
+      const res = await fetch(API + url);
+      if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+      const blob = await res.blob();
+      const img = document.getElementById('fractalImg');
+      img.src = URL.createObjectURL(blob);
+      document.getElementById('imageWrapper').classList.add('visible');
+      log('Graph loaded (' + blob.size + ' bytes)', 'rest');
+    } catch (e) {
+      log('Graph fetch failed: ' + e.message, 'err');
+      setStatus('failed', 'Graph fetch failed');
+    }
+    document.getElementById('submitBtn').disabled = false;
+  }
+</script>
+</body>
+</html>
