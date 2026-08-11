@@ -31,17 +31,27 @@ engine = create_engine(
 )
 
 
-@asynccontextmanager
+@asynccontextmanager # decorates into "async with"
 async def lifespan(app: FastAPI):
+    # "async def" don’t run immediately when called; 
+    # they return a coroutine object
     await to_thread.run_sync(SQLModel.metadata.create_all, engine)
+    # to run synchronous code in an asynchronous context
+    # to_thread.run_sync is used
+    # but we put the synchronous code to other thread, so we still need "await" for it
+    ############################################################
+    # before starting the app part before the "yield" statement are executed
     yield
+    # after the app is stopped part after the "yield" statement are executed
 
 app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 
 
 def get_db() -> Session:
     with Session(engine) as session:
-        yield session
+        # "with" statement ensures the resource (session) is closed 
+        # after the block is executed
+        yield session # pause to not cleanup the session yet
 
 
 static_dir = Path(__file__).parent / "static"
@@ -49,12 +59,14 @@ index_html = (static_dir / "index.html").read_text()
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+# executes "get", returns decorator that wraps the function
 def frontend():
     return index_html
 
 
 @app.post("/compute", status_code=202)
 def dispatch_computation(payload: dict, db: Session = Depends(get_db)):
+    # Depends(get_db) is a dependency injection
     """Receives request, spins up background task, and returns immediate tracking ID."""
     complexity = payload.get("complexity", 10)
     job_id = str(uuid.uuid4())
@@ -62,12 +74,11 @@ def dispatch_computation(payload: dict, db: Session = Depends(get_db)):
     # Register job tracker in database
     new_job = ComputeJob(id=job_id, input_data=complexity)
     print(new_job)
-    print(ComputeJob())
     db.add(new_job)
     db.commit()
 
-    # .delay() dispatches the task over to Redis/Celery immediately!
-    # The API code execution path passes over this instantly in microseconds.
+    # .delay() dispatches the task over to Redis/Celery immediately
+    # Does not wait
     run_complex_computation.delay(job_id, complexity)
 
     return {"job_id": job_id, "status": "PENDING", "message": "Calculation started in background"}
@@ -85,11 +96,12 @@ def get_job_status(job_id: str, db: Session = Depends(get_db)):
 @app.post(
     "/fractal",
     status_code=202,
-    tags=["Mathematical Computations"],
+    tags=["Mathematical Computations"], # for OpenAPI documentation
 )
 def compute_math_graph(payload: FractalRequest,  db: Session = Depends(get_db)):
+    # FractalRequest is a DTO
     job_id = str(uuid.uuid4())
-    new_job = GraphJob(
+    new_job = GraphJob( # GraphJob is an Entity
         id=job_id,
         center_x=payload.cx or DEFAULT_FRACTAL_CX,
         center_y=payload.cy or DEFAULT_FRACTAL_CY,
@@ -147,25 +159,25 @@ def get_computed_graph(job_id: str, db: Session = Depends(get_db)):
                 media_type="aplication/json"
             )
 
-    # Return raw binary bytes directly as a media stream response object!
+    # Return raw binary bytes directly as a media stream response object
     return Response(content=job.generated_graph, media_type="image/png")
 
 
 @app.websocket("/fractal/{job_id}/stream")
 async def stream_job_status(job_id: str, websocket: WebSocket):
-    # 1. Accept the incoming persistent TCP handshake
+    # Accept the incoming persistent TCP handshake
     await websocket.accept()
-    # 2. Establish an asynchronous connection to your Redis queue instance
+    # Establish an asynchronous connection to the Redis queue
     async_redis = aioredis.from_url(settings.REDIS_URL)
     pubsub: PubSub = async_redis.pubsub()
 
-    channel_name = f"job_status:{job_id}"
+    channel_name = f"job_status:{job_id}" # it should've been a constant ofc
     await pubsub.subscribe(channel_name)
     try:
-        # Send an immediate connection acknowledgment back to the UI client
+        # Send an immediate connection acknowledgment back to the client
         await websocket.send_json({"status": "CONNECTED", "message": f"Listening for changes on job {job_id}"})
 
-        # 3. Enter an async listening loop
+        # Enter an async listening loop
         while True:
             # Look for a message on the Redis channel without blocking other API routes
             message: Optional[str] = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
@@ -175,20 +187,20 @@ async def stream_job_status(job_id: str, websocket: WebSocket):
                 data_signal = message['data'].decode('utf-8')
 
                 if data_signal == JobStatus.COMPLETED.value:
-                    # 4. Fire the event down to the client's browser instantly!
+                    # Fire the event down to the client
                     await websocket.send_json({
                         "status": "SUCCESS", 
                         "message": "Mathematical rendering engine finished processing.",
                         "graph_url": f"/fractal/{job_id}/graph"
                     })
-                    break
-            # Yield control back to the event loop for a microsecond to keep things smooth
+                    break # while
+            # extra pause after each poll
             await asyncio.sleep(0.1)
     
     except WebSocketDisconnect:
         print(f"Client disconnected early from streaming socket for job: {job_id}")
     finally:
-        # 5. Production Clean-up: Always unsubscribe and close sockets to prevent file descriptor leaks
+        # Production Clean-up: Always unsubscribe and close sockets to prevent file descriptor leaks
         await pubsub.unsubscribe(channel_name)
         await websocket.close()
         
