@@ -20,7 +20,7 @@ class JobStatus(str, Enum):
     FAILED = "FAILED"
 
 
-""" DB """
+""" DB entities """
 class ComputeJob(SQLModel, table=True):
     id: str = Field(primary_key=True, max_length=36)
     status: JobStatus = Field(default=JobStatus.PENDING, max_length=20)
@@ -33,7 +33,7 @@ class GraphJob(SQLModel, table=True):
     id: str = Field(primary_key=True, max_length=36)
     status: JobStatus = Field(default=JobStatus.PENDING, max_length=20)
 
-    #  Mathematical bounding parameters sent by user
+    #  Mathematical bounding parameters sent by the user
     center_x: float
     center_y: float
     zoom: float
@@ -46,7 +46,7 @@ class GraphJob(SQLModel, table=True):
     )
 
 
-""" Input requests """
+""" Input requests (DTOs) """
 class FractalRequest(BaseModel):
     cx: float = PyField(default=DEFAULT_FRACTAL_CX, description="Real component center point on the complex numerical plane")
     cy: float = PyField(default=DEFAULT_FRACTAL_CY, description="Imaginary component center point on the complex plane")
